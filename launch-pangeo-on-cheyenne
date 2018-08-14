@@ -1,39 +1,131 @@
 #!/bin/bash
-
-# This script submits a job to cheyenne queue to start jupyter remotely. User
-# will receive an email when the job starts.
 #
-# Potential issues:
-# * After job starts, user needs to run
-#   $ qpeek {JOBID}
-#   To get remote host name (needed for pangeo-cheyenne-tunnel) and also
-#   to get the token for jupyter interface
-# 1) Can script parse "qstat -x -f" to print remote host to stdout once job is
-#    running?
-# 2) Can user specify a token at command line? Or can this script parse qpeek output
-#    to print token to stdout?
-# * Lots of options below that need a command line option
-#   -- Should we do this in python with parseargs?
-# * Should we make this useful on other HPCs as well, or is cheyenne-specific best?
+# USAGE: Launch this script from a local machine, it will connect to cheyenne as needed
+# Required argument: user name
+# This script handles two distinct tasks:
+# 1. submit a job to cheyenne queue to start jupyter remotely
+#    - wait for the job to start running
+#    - output remote host on which the job is running
+# 2. ssh tunnel to the remote cheyenne node to forward jupyter and dask ports
+#    (8888 and 8787, respectively)
+#
+# ^C will break the ssh tunnel, but will not kill the cheyenne job
+# => also want a way to skip step 1 and connect to a running job
+#
 
-### OPTIONS THAT USERS SHOULD SET
+if [ $# -ne 1 ]; then
+  echo "$(baseline $0) requires a single argument: user name for logging in to cheyenne"
+  exit 1
+fi
+REM_USER=$1
 
-QUEUE=share
-#QUEUE=economy
-ACCOUNT=`cat ~/.cesm_proj`
-NODES=1
-CORES=1
-HOURS=3
-ROOT_PATH=/glade/work/mlevy/codes/pangeo-tutorial-august-2018
-SET_PY_ENV="source activate pangeo"
-LAUNCH_JLAB=./start-jlab
+#######################################
+### THIS FUNCTION LAUNCHES JUPYTER
+### (RUN IT ON CHEYENNE)
+function launch_job () {
+  ### OPTIONS THAT USERS SHOULD SET FOR CHEYENNE
+  QUEUE=share
+  #QUEUE=economy
+  ACCOUNT=`cat ~/.cesm_proj`
+  NODES=1
+  CORES=1
+  HOURS=3
+  ROOT_PATH=/glade/work/mlevy/codes/pangeo-tutorial-august-2018
+  SET_PY_ENV="source activate pangeo"
+  LAUNCH_JLAB=./start-jlab
 
-### ACTUAL SUBMIT (same for everyone)
+  ### ACTUALLY  RUN THE JOB
+  # 1) Submit to queue
+  # QSUB_OPTS="-l inception=login -l walltime=${HOURS}:00:00 -l select=${NODES}:ncpus=${CORES}:mpiprocs=${CORES} -A ${ACCOUNT} -j oe -r n -m be -S /bin/bash -V -q ${QUEUE}"
+  # SUBMIT="qsub ${QSUB_OPTS} -N pangeo"
+  # RUNCMD="export LD_LIBRARY_PATH= ; ${SET_PY_ENV} ; cd ${ROOT_PATH} ; ${LAUNCH_JLAB}"
+  # echo "Running: ${RUNCMD}"
+  # echo "Submitting with: ${SUBMIT}"
+  # echo "${RUNCMD}" | ${SUBMIT}
+  # 1) Submit job
+  s=$(qsub << EOF
+  #!/bin/bash
+  #PBS -N pangeo
+  #PBS -q ${QUEUE}
+  #PBS -A ${ACCOUNT}
+  #PBS -l select=${NODES}:ncpus=${CORES}:mpiprocs=${CORES}
+  #PBS -l walltime=${HOURS}:00:00
+  #PBS -j oe
 
-QSUB_OPTS="-l inception=login -l walltime=${HOURS}:00:00 -l select=${NODES}:ncpus=${CORES}:mpiprocs=${CORES} -A ${ACCOUNT} -j oe -r n -m be -S /bin/bash -V -q ${QUEUE}"
-SUBMIT="qsub ${QSUB_OPTS} -N pangeo"
-RUNCMD="export LD_LIBRARY_PATH= ; ${SET_PY_ENV} ; cd ${ROOT_PATH} ; ${LAUNCH_JLAB}"
-echo "Running: ${RUNCMD}"
-echo "Submitting with: ${SUBMIT}"
-echo "${RUNCMD}" | ${SUBMIT}
+  module purge
+  export LD_LIBRARY_PATH=
+  ${SET_PY_ENV}
+  cd ${ROOT_PATH}
+  ${LAUNCH_JLAB}
+EOF
+  )
+  SJOB=${s%.*}
 
+  # 2) Kill job that hasn't started yet with ^C
+  trap ctrl_c INT HUP
+  function ctrl_c() {
+    echo ""
+    echo "Killing ${SJOB}"
+    qdel ${SJOB}
+    exit 0
+  }
+
+  # 3) Wait for job to start
+  echo -n "waiting for job to run"
+  while [ 1 ]; do
+      #-- get job status
+      STATE=$(qstat -x -f ${SJOB} | grep job_state | awk -F= '{print $2}')
+      HOST=$(qstat -x -f ${SJOB} | grep exec_host | awk -F= '{print $2}')
+      if [[ -n "${HOST}" && "${STATE}" =~ R ]]; then
+        echo " run started!"
+        echo "Job ID: ${SJOB}"
+        echo "Job host: ${HOST}"
+        break
+      elif [[ ${STATE} =~ F ]]; then
+        echo " run failed:"
+        qstat -x -f  ${SJOB}
+        exit 1
+      else
+        echo -n "."
+      fi
+      sleep 1
+  done
+}
+#######################################
+
+#######################################
+### THIS FUNCTION CREATES SSH TUNNEL
+### ALLOWS USERS TO ACCESS JUPYTER
+### (RUNNING ON CHEYENNE) VIA
+### https://localhost:8888
+### ALSO FORWARDS DASK DASHBOARD TO
+### https://localhost:8787
+function create_tunnel () {
+  REM_HOST=`grep Job\ host .last_run.log | cut -d ':' -f 2 | cut -d '/' -f 1 | tr -d ' '`
+  cmd="ssh -N -l ${REM_USER} -L 8888:${REM_HOST}:8888 -L 8787:${REM_HOST}:8787 cheyenne.ucar.edu"
+  echo $cmd
+  nohup $cmd &
+  tunnel=$!
+
+  # ^C should kill the tunnels
+  trap "kill -9 $tunnel; exit 1" INT
+
+  echo "Use ^C to kill ssh tunnel"
+  while [ 1 ]; do
+    sleep 1
+  done
+}
+#######################################
+
+#######################################
+### MAIN SCRIPT
+# 1) RUN launch_job ON CHEYENNE
+ssh cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.log
+  $(declare -f launch_job)
+  launch_job
+EOF
+
+# 2) RUN create_tunnel AFTER CHEYENNE JOB LAUNCHES
+if [ $? -eq 0 ]; then
+  create_tunnel
+fi
