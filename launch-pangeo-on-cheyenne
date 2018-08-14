@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# This script submits a job to cheyenne queue to start jupyter remotely. User
+# will receive an email when the job starts.
+#
+# Potential issues:
+# * After job starts, user needs to run
+#   $ qpeek {JOBID}
+#   To get remote host name (needed for pangeo-cheyenne-tunnel) and also
+#   to get the token for jupyter interface
+# 1) Can script parse "qstat -x -f" to print remote host to stdout once job is
+#    running?
+# 2) Can user specify a token at command line? Or can this script parse qpeek output
+#    to print token to stdout?
+# * Lots of options below that need a command line option
+#   -- Should we do this in python with parseargs?
+# * Should we make this useful on other HPCs as well, or is cheyenne-specific best?
+
+### OPTIONS THAT USERS SHOULD SET
+
+QUEUE=share
+#QUEUE=economy
+ACCOUNT=`cat ~/.cesm_proj`
+NODES=1
+CORES=1
+HOURS=3
+ROOT_PATH=/glade/work/mlevy/codes/pangeo-tutorial-august-2018
+SET_PY_ENV="source activate pangeo"
+LAUNCH_JLAB=./start-jlab
+
+### ACTUAL SUBMIT (same for everyone)
+
+QSUB_OPTS="-l inception=login -l walltime=${HOURS}:00:00 -l select=${NODES}:ncpus=${CORES}:mpiprocs=${CORES} -A ${ACCOUNT} -j oe -r n -m be -S /bin/bash -V -q ${QUEUE}"
+SUBMIT="qsub ${QSUB_OPTS} -N pangeo"
+RUNCMD="export LD_LIBRARY_PATH= ; ${SET_PY_ENV} ; cd ${ROOT_PATH} ; ${LAUNCH_JLAB}"
+echo "Running: ${RUNCMD}"
+echo "Submitting with: ${SUBMIT}"
+echo "${RUNCMD}" | ${SUBMIT}
+
