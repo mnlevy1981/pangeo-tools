@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# Given a compute node on cheyenne (eg. r#i#n#), set up necessary ssh tunnels
+# For jupyter (8888) and dask (8787)
+
+# Potential issues:
+# * two users running jupyter on the same share node => one will be bumped to 8889
+# * need to know token for jupyter interface
+#   - can we either skip the token or request a specific token when launching?
+
+function usage() {
+  echo "$(basename $0) USERNAME HOSTNAME"
+  echo "   set up ssh tunnels for ports 8888 and 8787 to HOSTNAME through USERNAME@cheyenne.ucar.edu"
+}
+
+if [ $# -ne 2 ]; then
+  echo "ERROR: must provide two arguments argument"
+  usage
+  exit 1
+fi
+
+if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+  usage
+  exit 0
+fi
+
+
+# ^C should kill the tunnels
+trap ctrl_c INT
+function ctrl_c() {
+  kill -9 $tunnel
+  exit 0
+}
+
+REM_USER=$1
+REM_HOST=$2
+
+echo "SSH tunnel to forward dask"
+nohup ssh -N -l ${REM_USER} -L 8888:${REM_HOST}:8888 -L 8787:${REM_HOST}:8787 cheyenne.ucar.edu &
+tunnel=$!
+
+echo "Use ^C to kill ssh tunnel"
+while [ 1 ]; do
+  sleep 1
+done
