@@ -64,7 +64,7 @@ done
 # Check for required arguments
 # Always require user for logging in to cheyenne
 # Either need account to charge (for launching jupyter) OR a job id / compute node name of running jupyter
-if [ -z $REM_USER ] || { [ -z $ACCOUNT ] && [ -z $JOBID ] && [ -z $REM_HOST]; }; then
+if { [ -z $ACCOUNT ] && [ -z $JOBID ] && [ -z $REM_HOST ]; } || [ -z $REM_USER ]; then
   usage
   exit 1
 fi
@@ -161,17 +161,9 @@ function create_tunnel () {
 #######################################
 
 #######################################
-### This function gets remote host given job ID
-### Written as a function to avoid "qstat not found" error
-function get_REM_HOST () {
-  echo `qstat -x -f $1 | grep exec_host | awk -F= '{print $2}'`
-}
-#######################################
-
-#######################################
 ### MAIN SCRIPT
 # 1) RUN launch_job ON CHEYENNE
-if [ -z $JOBID ] && [ -z REM_HOST ]; then
+if [ -z $JOBID ] && [ -z $REM_HOST ]; then
   ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.log
     $(declare -f launch_job)
     launch_job ${REM_USER} ${ACCOUNT}
@@ -184,8 +176,7 @@ if [ -z $REM_HOST ]; then
   if [ ! -z $JOBID ]; then
     echo "Getting remote host from Job ID..."
     ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.host
-    $(declare -f get_REM_HOST)
-    get_REM_HOST $JOBID
+    echo `qstat -x -f $JOBID | grep exec_host | awk -F= '{print $2}'`
 EOF
     REM_HOST=`cat .last_run.host | cut -d '/' -f 1`
     if [ -z $REM_HOST ]; then
