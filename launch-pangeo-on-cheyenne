@@ -114,9 +114,8 @@ function launch_job () {
   cd ${ROOT_PATH}
   # FIXME: how do I get the correct hostname here?
   #        (this returns empty string)
-  this_host='$(hostname)'
-  echo "hostname = '${this_host}'" > .jupyter_lab.log
-  jupyter lab --no-browser --ip='${this_host}' 2>&1 | tee -a .jupyter_lab.log
+  echo "hostname = $(echo '$(hostname)')" > .jupyter_lab.log
+  jupyter lab --no-browser --ip=`echo "$(echo '$(hostname)')"` 2>&1 | tee -a .jupyter_lab.log
 EOF
   )
   SJOB=${s%.*}
@@ -155,7 +154,8 @@ EOF
   done
 
   # 4) After job is running, figure out correct ssh command / token
-  # FIXME: coming soon
+  # FIXME: coming soon (note that logic from start-jlab can be used
+  #        on text in .jupyter_lab.log!
 }
 #######################################
 
