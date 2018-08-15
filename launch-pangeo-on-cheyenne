@@ -1,12 +1,14 @@
 #!/bin/bash
 #
 # USAGE: Launch this script from a local machine, it will connect to cheyenne as needed
-# Required arguments:
-# - user name
+# Required arguments (one of the following):
 # - account key to charge
+# - job id to reconnect to
+# - remote host running (to reconnect to)
+# - job id to kill to stop jupyter
 #
 # Optional arguments:
-# - job id OR job name (if reconnecting to existing lab)
+# - user name
 # - walltime requested (default 3 hours)
 #
 # Things user can change by editing script:
@@ -30,8 +32,9 @@ function usage () {
 }
 # Parse getopts
 # Abort if user not specified
+REM_USER=$USER
 WALLTIME="4:00:00"
-while getopts "u:A:i:H:w:h" opt; do
+while getopts "u:A:i:H:w:k:h" opt; do
   case $opt in
     u)
       REM_USER=$OPTARG
@@ -48,15 +51,19 @@ while getopts "u:A:i:H:w:h" opt; do
     w)
       WALLTIME=$OPTARG
     ;;
+    k)
+      JOBID_TO_KILL=$OPTARG
+    ;;
     h|\?)
-      echo "Usage: $(basename $0) -u USERNAME [-A ACCOUNT] [-i JOBID] [-H REMHOST] [-w WALLTIME]"
-      echo "       USERNAME - ssh to cheyenne with 'ssh USERNAME@cheyenne.ucar.edu'"
+      echo "Usage: $(basename $0) [-u USERNAME] [-A ACCOUNT] [-i JOBID] [-H REMHOST] [-k JOBID_TO_KILL] [-w WALLTIME]"
+      echo "       USERNAME - ssh to cheyenne with 'ssh USERNAME@cheyenne.ucar.edu' (default: username on local machine, i.e. $USER)"
       echo "       ACCOUNT - account key to charge for running jupyter lab"
-      echo "       JOBID - Existing job ID of jupyter lab running on cheyenne"
+      echo "       JOBID - Existing job ID of jupyter lab running on cheyenne (to tunnel into)"
+      echo "       JOBID_TO_KILL - Existing job ID of jupyter lab running on cheyenne (to kill the job)"
       echo "       REMHOST - Compute node currently running jupyter lab"
       echo "       WALLTIME - walltime for job on share queue running jupyter lab (default: 4:00:00)"
-      echo " USERNAME is always required. Provide ACCOUNT to launch a new job, otherwise"
-      echo " provide either JOBID or REMHOST"
+      echo " Provide ACCOUNT to launch a new job, otherwise provide one of:"
+      echo " JOBID, JOBID_TO_KILL, or REMHOST"
       exit 0
     ;;
     *)
@@ -69,7 +76,8 @@ done
 # Check for required arguments
 # Always require user for logging in to cheyenne
 # Either need account to charge (for launching jupyter) OR a job id / compute node name of running jupyter
-if { [ -z $ACCOUNT ] && [ -z $JOBID ] && [ -z $REM_HOST ]; } || [ -z $REM_USER ]; then
+if [ -z $ACCOUNT ] && [ -z $JOBID ] && \
+   [ -z $JOBID_TO_KILL ] && [ -z $REM_HOST ]; then
   usage
   exit 1
 fi
@@ -89,7 +97,6 @@ function launch_job () {
   CORES=1
   ROOT_PATH=/glade/work/${REM_USER}/
   SET_PY_ENV="source activate pangeo"
-  LAUNCH_JLAB=./codes/pangeo-tutorial-august-2018/start-jlab
 
   # 1) Submit job
   s=$(qsub << EOF
@@ -105,7 +112,11 @@ function launch_job () {
   export LD_LIBRARY_PATH=
   ${SET_PY_ENV}
   cd ${ROOT_PATH}
-  ${LAUNCH_JLAB}
+  # FIXME: how do I get the correct hostname here?
+  #        (this returns empty string)
+  this_host='$(hostname)'
+  echo "hostname = '${this_host}'" > .jupyter_lab.log
+  jupyter lab --no-browser --ip='${this_host}' 2>&1 | tee -a .jupyter_lab.log
 EOF
   )
   SJOB=${s%.*}
@@ -120,18 +131,21 @@ EOF
   }
 
   # 3) Wait for job to start
+  date
   echo -n "waiting for job to run"
   while [ 1 ]; do
       #-- get job status
       STATE=$(qstat -x -f ${SJOB} | grep job_state | awk -F= '{print $2}')
       HOST=$(qstat -x -f ${SJOB} | grep exec_host | awk -F= '{print $2}')
       if [[ -n "${HOST}" && "${STATE}" =~ R ]]; then
-        echo " run started!"
+        echo "."
+        echo "Run started!"
+        date
         echo "Job ID: ${SJOB}"
         echo "Job host: ${HOST}"
         break
       elif [[ ${STATE} =~ F ]]; then
-        echo " run failed:"
+          echo " run failed:"
         qstat -x -f  ${SJOB}
         exit 1
       else
@@ -139,6 +153,9 @@ EOF
       fi
       sleep 1
   done
+
+  # 4) After job is running, figure out correct ssh command / token
+  # FIXME: coming soon
 }
 #######################################
 
@@ -167,7 +184,14 @@ function create_tunnel () {
 
 #######################################
 ### MAIN SCRIPT
-# 1) RUN launch_job ON CHEYENNE
+# KILL JOB IF REQUESTED
+if [ ! -z $JOBID_TO_KILL ]; then
+  echo "Killing $JOBID_TO_KILL..."
+  ssh ${REM_USER}@cheyenne.ucar.edu "qdel $JOBID_TO_KILL"
+  exit 0
+fi
+
+# RUN launch_job ON CHEYENNE
 if [ -z $JOBID ] && [ -z $REM_HOST ]; then
   ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.log
     $(declare -f launch_job)
@@ -176,12 +200,12 @@ EOF
   REM_HOST=`grep Job\ host .last_run.log | cut -d ':' -f 2 | cut -d '/' -f 1 | tr -d ' '`
 fi
 
-# 2) RUN create_tunnel AFTER CHEYENNE JOB LAUNCHES
+# RUN create_tunnel AFTER CHEYENNE JOB LAUNCHES
 if [ -z $REM_HOST ]; then
   if [ ! -z $JOBID ]; then
     echo "Getting remote host from Job ID..."
     ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.host
-    echo `qstat -x -f $JOBID | grep exec_host | awk -F= '{print $2}'`
+    echo `\qstat -x -f $JOBID | grep exec_host | awk -F= '{print $2}'`
 EOF
     REM_HOST=`cat .last_run.host | cut -d '/' -f 1`
     if [ -z $REM_HOST ]; then
