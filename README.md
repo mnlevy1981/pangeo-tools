@@ -38,3 +38,19 @@ Alternatively, if you already have a conda environment you wish to use, specify 
 There is a package named `nbserverproxy` that can be used to forward this port through 8888 (the jupyter port),
 but it doesn't work with the current `dask-jobqueue` release.
 This repository will be updated once `dask-jobqueue` has been updated.
+
+1. `jupyterlab` will launch from `/glade/work/$USER`
+
+### Options
+
+1. If you get disconnected and need to re-establish the ssh tunnel, use the `-H REMHOST` option
+(where `REMHOST` is the name of the compute node you are running).
+The host name should be printed as part of the output of the script the first time you run it:
+```
+Job host:  r8i7n9
+```
+Or can be found with
+```
+$ qstat -xf JOBID | grep exec_host
+    exec_host = r8i7n9/1
+```

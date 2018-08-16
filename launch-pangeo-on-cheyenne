@@ -34,7 +34,7 @@ function usage () {
 REM_USER=$USER
 WALLTIME="4:00:00"
 CONDA_ENV=pangeo-cheyenne
-while getopts "u:l:A:i:H:w:k:e:h" opt; do
+while getopts "u:l:A:i:p:H:w:k:e:h" opt; do
   case $opt in
     u|l)
       REM_USER=$OPTARG
@@ -44,6 +44,9 @@ while getopts "u:l:A:i:H:w:k:e:h" opt; do
     ;;
     i)
       JOBID=$OPTARG
+    ;;
+    p)
+      LOCALPORT=$OPTARG
     ;;
     H)
       REM_HOST=$OPTARG
@@ -59,12 +62,13 @@ while getopts "u:l:A:i:H:w:k:e:h" opt; do
     ;;
     h|\?)
       echo "Usage: $(basename $0) [-u USERNAME] [-A ACCOUNT] [-i JOBID] [-k JOBID_TO_KILL]"
-      echo "                      [-H REMHOST] [-w WALLTIME] [-e CONDA_ENV]"
+      echo "                      [-H REMHOST] [-p LOCALPORT] [-w WALLTIME] [-e CONDA_ENV]"
       echo "       USERNAME - ssh to cheyenne with 'ssh USERNAME@cheyenne.ucar.edu' (default: username on local machine, i.e. $USER)"
       echo "       ACCOUNT - account key to charge for running jupyter lab (default: cheyenne env var \$PBS_ACCOUNT)"
       echo "       JOBID - Existing job ID of jupyter lab running on cheyenne (to tunnel into)"
       echo "       JOBID_TO_KILL - Existing job ID of jupyter lab running on cheyenne (to kill the job)"
       echo "       REMHOST - Compute node currently running jupyter lab"
+      echo "       LOCALPORT - port on localhost to forward to (default: first open port >=8888)"
       echo "       WALLTIME - walltime for job on share queue running jupyter lab (default: 4:00:00)"
       echo "       CONDA_ENV - name of conda environment that contains jupyter lab (default: pangeo-cheyenne)"
       echo " NOTES:"
@@ -141,8 +145,8 @@ EOF
   echo -n "waiting for job to run"
   while [ 1 ]; do
       #-- get job status
-      STATE=$(qstat -x -f ${SJOB} | grep job_state | awk -F= '{print $2}')
-      HOST=$(qstat -x -f ${SJOB} | grep exec_host | awk -F= '{print $2}' | cut -d '/' -f 1)
+      STATE=$(qstat -xf ${SJOB} | grep job_state | awk -F= '{print $2}')
+      HOST=$(qstat -xf ${SJOB} | grep exec_host | awk -F= '{print $2}' | cut -d '/' -f 1)
       if [[ -n "${HOST}" && "${STATE}" =~ R ]]; then
         echo "."
         echo "Run started!"
@@ -152,7 +156,7 @@ EOF
         break
       elif [[ ${STATE} =~ F ]]; then
           echo " run failed:"
-        qstat -x -f  ${SJOB}
+        qstat -xf  ${SJOB}
         exit 1
       else
         echo -n "."
@@ -195,12 +199,23 @@ EOF
 ### THIS FUNCTION CREATES SSH TUNNEL
 ### ALLOWS USERS TO ACCESS JUPYTER
 ### (RUNNING ON CHEYENNE) VIA
-### https://localhost:8888
+### https://localhost:${LOCALPORT}
 function create_tunnel () {
-  cmd="ssh -N -l ${REM_USER} -L 8888:${REM_HOST}:${PORT} cheyenne.ucar.edu"
+  if [ -z $LOCALPORT ]; then
+    LOCALPORT=8888
+    while [ ! -z "`lsof -Pi :${LOCALPORT} -sTCP:LISTEN`" ]; do
+      LOCALPORT=$((LOCALPORT+1))
+      if [ $LOCALPORT -ge 8900 ]; then
+        echo "Can not find an open port between 8888 and 8899"
+        exit 1
+      fi
+    done
+  fi
+  cmd="ssh -N -l ${REM_USER} -L ${LOCALPORT}:${REM_HOST}:${PORT} cheyenne.ucar.edu"
   echo $cmd
   nohup $cmd &
   tunnel=$!
+  echo "Tunnel PID: ${tunnel}"
 
   # ^C should kill the tunnels
   trap "kill -9 $tunnel; rm -f .last_run* nohup.out; exit 0" INT
@@ -208,12 +223,17 @@ function create_tunnel () {
   echo "Use ^C to kill ssh tunnel"
 
   if [ `uname` == "Darwin" ]; then
-    # Listen to :8888, open jupyter web page when tunnel is connected
-    while [ -z "`lsof -Pi :8888 -sTCP:LISTEN`" ]; do
+    # Listen to :${LOCALPORT}, open jupyter web page when tunnel is connected
+    echo "Waiting for tunnel to open"
+    while [ -z "`lsof -Pi :${LOCALPORT} -sTCP:LISTEN`" ]; do
+      if ! ps -p $tunnel > /dev/null; then
+        echo "PID $tunnel died!"
+        exit 1
+      fi
       sleep 1
     done
     echo "Opening jupyter lab!"
-    open http://localhost:8888
+    open http://localhost:${LOCALPORT}
   fi
   while [ 1 ]; do
     sleep 1
@@ -250,7 +270,7 @@ if [ -z $REM_HOST ]; then
   if [ ! -z $JOBID ]; then
     echo "Getting remote host from Job ID..."
     ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.host
-    \qstat -x -f $JOBID | grep exec_host | awk -F= '{print $2}'
+    qstat -xf $JOBID | grep exec_host | awk -F= '{print $2}'
 EOF
     REM_HOST=`cat .last_run.host | cut -d '/' -f 1`
     if [ -z $REM_HOST ]; then
