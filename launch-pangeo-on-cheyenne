@@ -209,7 +209,7 @@ function create_tunnel () {
 
   if [ `uname` == "Darwin" ]; then
     # Listen to :8888, open jupyter web page when tunnel is connected
-    while [ -z `lsof -Pi :8888 -sTCP:LISTEN` ]; do
+    while [ -z "`lsof -Pi :8888 -sTCP:LISTEN`" ]; do
       sleep 1
     done
     echo "Opening jupyter lab!"
