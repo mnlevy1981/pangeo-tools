@@ -235,6 +235,16 @@ function create_tunnel () {
     echo "Opening jupyter lab!"
     open http://localhost:${LOCALPORT}
   fi
+
+  # Instead of sleeping, should we be forwarding the jupyter log with either
+  #
+  # $ tail -f ${ROOT_PATH}/.jupyter_lab.log
+  #
+  # or
+  #
+  # $ qpeek -f ${JOBID}
+  #
+  # I don't know if this routine is aware of either value...
   while [ 1 ]; do
     sleep 1
   done

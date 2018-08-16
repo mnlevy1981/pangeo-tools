@@ -43,6 +43,11 @@ This repository will be updated once `dask-jobqueue` has been updated.
 
 ### Options
 
+1. This script assumes your username on cheyenne matches your local username. If this is not the case, specify your cheyenne username with `-u USERNAME`
+
+1. If you have specified the environment variable `$PBS_ACCOUNT` on cheyenne, that account will be charged by `qsub`.
+If you do not have that environment variable defined, or you want to charge a different account, use `-A ACCOUNT`
+
 1. If you get disconnected and need to re-establish the ssh tunnel, use the `-H REMHOST` option
 (where `REMHOST` is the name of the compute node you are running).
 The host name should be printed as part of the output of the script the first time you run it:
@@ -54,3 +59,21 @@ Or can be found with
 $ qstat -xf JOBID | grep exec_host
     exec_host = r8i7n9/1
 ```
+Where `JOBID` is also available from the script output
+```
+Job ID: 1692005
+```
+or from running `qstat` on cheyenne.
+
+1. When you are done with jupyter, you can kill the cheyenne job with `-k JOBID_TO_KILL`
+(see above for tips on determining the job ID)
+
+1. By default, 4 hours of walltime will be requested.
+To run jupyter for a longer (or shorter), use `-w H:MM:SS`
+
+### When things go wrong
+
+To see the output from jupyter, log in to cheyenne and run `qpeek -f JOBID`.
+Occasionally jupyter lab will hang on the compute node.
+Sometimes it will bounce back in a few seconds,
+other times the only solution is to kill the job and relaunch jupyter lab.
