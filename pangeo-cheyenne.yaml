@@ -1,0 +1,14 @@
+# conda env create -f pangeo-cheyenne.yaml
+name: pangeo-cheyenne
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3
+  - Cartopy
+  - xarray
+  - matplotlib
+  - jupyterlab
+  - dask
+  - dask-jobqueue=0.3.0
+  - nbserverproxy

@@ -10,7 +10,6 @@
 # Optional arguments:
 # - user name
 # - walltime requested (default 3 hours)
-# - dask port (default 8787)
 #
 # Things user can change by editing script:
 # - queue / node & core count (recommend requesting single core via share queue)
@@ -21,8 +20,7 @@
 # 1. submit a job to cheyenne queue to start jupyter remotely
 #    - wait for the job to start running
 #    - output remote host on which the job is running
-# 2. ssh tunnel to the remote cheyenne node to forward jupyter and dask ports
-#    (8888 and 8787, respectively)
+# 2. ssh tunnel to the remote cheyenne node to forward jupyter to localhost:8888
 #
 # ^C will break the ssh tunnel, but will not kill the cheyenne job
 # => also want a way to skip step 1 and connect to a running job
@@ -34,10 +32,9 @@ function usage () {
 # Parse getopts
 # Abort if user not specified
 REM_USER=$USER
-DASKPORT=8787
 WALLTIME="4:00:00"
-CONDA_ENV=pangeo
-while getopts "u:l:A:i:H:w:k:p:e:h" opt; do
+CONDA_ENV=pangeo-cheyenne
+while getopts "u:l:A:i:H:w:k:e:h" opt; do
   case $opt in
     u|l)
       REM_USER=$OPTARG
@@ -57,29 +54,23 @@ while getopts "u:l:A:i:H:w:k:p:e:h" opt; do
     k)
       JOBID_TO_KILL=$OPTARG
     ;;
-    p)
-      DASKPORT=$OPTARG
-    ;;
     e)
       CONDA_ENV=$OPTARG
     ;;
     h|\?)
       echo "Usage: $(basename $0) [-u USERNAME] [-A ACCOUNT] [-i JOBID] [-k JOBID_TO_KILL]"
-      echo "                      [p DASKPORT] [-H REMHOST] [-w WALLTIME] [-e CONDA_ENV]"
+      echo "                      [-H REMHOST] [-w WALLTIME] [-e CONDA_ENV]"
       echo "       USERNAME - ssh to cheyenne with 'ssh USERNAME@cheyenne.ucar.edu' (default: username on local machine, i.e. $USER)"
-      echo "       ACCOUNT - account key to charge for running jupyter lab"
+      echo "       ACCOUNT - account key to charge for running jupyter lab (default: cheyenne env var \$PBS_ACCOUNT)"
       echo "       JOBID - Existing job ID of jupyter lab running on cheyenne (to tunnel into)"
       echo "       JOBID_TO_KILL - Existing job ID of jupyter lab running on cheyenne (to kill the job)"
-      echo "       DASKPORT - Port to forward to 8787 for dask dashboard (default: 8787)"
       echo "       REMHOST - Compute node currently running jupyter lab"
       echo "       WALLTIME - walltime for job on share queue running jupyter lab (default: 4:00:00)"
-      echo "       CONDA_ENV - name of conda environment that contains jupyter lab (default: pangeo)"
+      echo "       CONDA_ENV - name of conda environment that contains jupyter lab (default: pangeo-cheyenne)"
       echo " NOTES:"
-      echo "        1. Provide ACCOUNT to launch a new job, otherwise provide one of:"
-      echo "           JOBID, JOBID_TO_KILL, or REMHOST"
-      echo "        2. the -p option exists because there is always the possibility that you run dask on a"
-      echo "           shared node that is already running the dashboard for someone else. In those cases, you"
-      echo "           will need to rerun this script just to recreate the tunnel with the correct port number."
+      echo "        1. If you are launching a new jupyter lab instance, an account key is required."
+      echo "           If ACCOUNT is not specified, this script will look for \$PBS_ACCOUNT on cheyenne,"
+      echo "           but if that environment variable is not set then the script will abort."
       exit 0
     ;;
     *)
@@ -89,24 +80,22 @@ while getopts "u:l:A:i:H:w:k:p:e:h" opt; do
   esac
 done
 
-# Check for required arguments
-# Always require user for logging in to cheyenne
-# Either need account to charge (for launching jupyter) OR a job id / compute node name of running jupyter
-if [ -z $ACCOUNT ] && [ -z $JOBID ] && \
-   [ -z $JOBID_TO_KILL ] && [ -z $REM_HOST ]; then
-  usage
-  exit 1
-fi
-
 #######################################
 ### THIS FUNCTION LAUNCHES JUPYTER
 ### (RUN IT ON CHEYENNE)
 function launch_job () {
   # Several variables passed through call to launch_job
   REM_USER=$1
-  ACCOUNT=$2
-  WALLTIME=$3
-  CONDA_ENV=$4
+  WALLTIME=$2
+  CONDA_ENV=$3
+  ACCOUNT=$4
+  if [ -z $ACCOUNT ]; then
+    ACCOUNT=${PBS_ACCOUNT}
+  fi
+  if [ -z $ACCOUNT ]; then
+    echo "Can not find an account key to use, please specify one with -A"
+    exit 1
+  fi
 
   ### OPTIONS THAT USERS SHOULD SET FOR CHEYENNE
   QUEUE=share
@@ -115,7 +104,8 @@ function launch_job () {
   ROOT_PATH=/glade/work/${REM_USER}/
   SET_PY_ENV="source activate ${CONDA_ENV}"
 
-  # 1) Submit job
+  # 1) Clean up output file, then submit job
+  rm -f ${ROOT_PATH}/.jupyter_lab.log
   s=$(qsub << EOF
   #!/bin/bash
   #PBS -N pangeo
@@ -170,6 +160,11 @@ EOF
       sleep 1
   done
 
+  echo "Waiting for job to start writing log file..."
+  while [ ! -e ${ROOT_PATH}/.jupyter_lab.log ]; do
+    sleep 1
+  done
+
   # 4) After job is running, figure out correct ssh command / token
   #    Then return the jupyter port number
   WAITTIME=0
@@ -201,10 +196,8 @@ EOF
 ### ALLOWS USERS TO ACCESS JUPYTER
 ### (RUNNING ON CHEYENNE) VIA
 ### https://localhost:8888
-### ALSO FORWARDS DASK DASHBOARD TO
-### https://localhost:8787
 function create_tunnel () {
-  cmd="ssh -N -l ${REM_USER} -L 8888:${REM_HOST}:${PORT} -L 8787:${REM_HOST}:${DASKPORT} cheyenne.ucar.edu"
+  cmd="ssh -N -l ${REM_USER} -L 8888:${REM_HOST}:${PORT} cheyenne.ucar.edu"
   echo $cmd
   nohup $cmd &
   tunnel=$!
@@ -213,6 +206,15 @@ function create_tunnel () {
   trap "kill -9 $tunnel; rm -f .last_run* nohup.out; exit 0" INT
 
   echo "Use ^C to kill ssh tunnel"
+
+  if [ `uname` == "Darwin" ]; then
+    # Listen to :8888, open jupyter web page when tunnel is connected
+    while [ -z `lsof -Pi :8888 -sTCP:LISTEN` ]; do
+      sleep 1
+    done
+    echo "Opening jupyter lab!"
+    open http://localhost:8888
+  fi
   while [ 1 ]; do
     sleep 1
   done
@@ -225,15 +227,16 @@ function create_tunnel () {
 if [ ! -z $JOBID_TO_KILL ]; then
   echo "Killing $JOBID_TO_KILL..."
   ssh ${REM_USER}@cheyenne.ucar.edu "qdel $JOBID_TO_KILL"
-  rm -f .port
+  rm -f .port .token
   exit 0
 fi
 
 # RUN launch_job ON CHEYENNE
 if [ -z $JOBID ] && [ -z $REM_HOST ]; then
+  rm -f .port .token .last_run.log
   ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.log
     $(declare -f launch_job)
-    launch_job ${REM_USER} ${ACCOUNT} ${WALLTIME} ${CONDA_ENV}
+    launch_job ${REM_USER} ${WALLTIME} ${CONDA_ENV} ${ACCOUNT}
 EOF
   REM_HOST=`grep Job\ host .last_run.log | cut -d ':' -f 2 | tr -d ' '`
   PORT=`grep Port\ to\ forward .last_run.log | cut -d ':' -f 2 | tr -d ' '`
@@ -247,7 +250,7 @@ if [ -z $REM_HOST ]; then
   if [ ! -z $JOBID ]; then
     echo "Getting remote host from Job ID..."
     ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.host
-    echo `\qstat -x -f $JOBID | grep exec_host | awk -F= '{print $2}'`
+    \qstat -x -f $JOBID | grep exec_host | awk -F= '{print $2}'
 EOF
     REM_HOST=`cat .last_run.host | cut -d '/' -f 1`
     if [ -z $REM_HOST ]; then
