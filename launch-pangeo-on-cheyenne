@@ -137,30 +137,31 @@ EOF
   # 3) Wait for job to start
   date
   echo -n "waiting for job to run"
-  while [ 1 ]; do
-      #-- get job status
+  QSTAT_FREQ=60
+  WAITTIME=${QSTAT_FREQ}
+  FIRST=1
+  while [ ! -e ${ROOT_PATH}/.jupyter_lab.log ]; do
+    if [ ${WAITTIME} == ${QSTAT_FREQ} ]; then
+      #-- get job state from qstat -xf
       STATE=$(qstat -xf ${SJOB} | grep job_state | awk -F= '{print $2}')
-      HOST=$(qstat -xf ${SJOB} | grep exec_host | awk -F= '{print $2}' | cut -d '/' -f 1)
-      if [[ -n "${HOST}" && "${STATE}" =~ R ]]; then
-        echo "."
-        echo "Run started!"
-        date
-        echo "Job ID: ${SJOB}"
-        echo "Job host: ${HOST}"
-        break
-      elif [[ ${STATE} =~ F ]]; then
-          echo " run failed:"
-        qstat -xf  ${SJOB}
+      if [[ ${STATE} =~ F ]]; then
+        echo ""
+        echo "Run failed!"
+        qstat -xf ${SJOB}
         exit 1
       else
-        echo -n "."
+        if [ $FIRST -ne 1 ]; then
+          echo ""
+          echo -n "still waiting"
+        fi
+        FIRST=0
+        WAITTIME=0
       fi
-      sleep 10
-  done
-
-  echo "Waiting for job to start writing log file..."
-  while [ ! -e ${ROOT_PATH}/.jupyter_lab.log ]; do
-    sleep 1
+    else
+      echo -n '.'
+      sleep 1
+      WAITTIME=$((WAITTIME + 1))
+    fi
   done
 
   # 4) After job is running, figure out correct ssh command / token
@@ -181,11 +182,16 @@ EOF
     sleep 1
     WAITTIME=$((WAITTIME + 1))
   done
+  HOST=$(echo $ADDRESS | cut -d ':' -f 1)
   PORT=$(echo $ADDRESS | awk -F':' ' { print $2 } ' | awk -F'/' ' { print $1 } ')
   TOKEN=$(echo $ADDRESS | awk -F'=' ' { print $NF } ')
 
+  echo ""
+  echo "Job ID: $SJOB"
+  echo "Job host: $HOST"
   echo "Port to forward for jupyter lab: $PORT"
   echo "Token for jupyter lab: $TOKEN"
+  echo ""
 }
 #######################################
 
