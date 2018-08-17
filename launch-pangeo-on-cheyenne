@@ -137,11 +137,9 @@ EOF
   # 3) Wait for job to start
   date
   echo -n "waiting for job to run"
-  QSTAT_FREQ=60
-  WAITTIME=${QSTAT_FREQ}
-  FIRST=1
+  WAITTIME=0
   while [ ! -e ${ROOT_PATH}/.jupyter_lab.log ]; do
-    if [ ${WAITTIME} == ${QSTAT_FREQ} ]; then
+    if [ ${WAITTIME} -ge 60 ]; then
       #-- get job state from qstat -xf
       STATE=$(qstat -xf ${SJOB} | grep job_state | awk -F= '{print $2}')
       if [[ ${STATE} =~ F ]]; then
@@ -150,16 +148,13 @@ EOF
         qstat -xf ${SJOB}
         exit 1
       else
-        if [ $FIRST -ne 1 ]; then
-          echo ""
-          echo -n "still waiting"
-        fi
-        FIRST=0
+        echo ""
+        echo -n "still waiting"
         WAITTIME=0
       fi
     else
-      echo -n '.'
       sleep 1
+      echo -n '.'
       WAITTIME=$((WAITTIME + 1))
     fi
   done
