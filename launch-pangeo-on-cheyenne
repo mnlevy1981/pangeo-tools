@@ -132,13 +132,7 @@ EOF
   SJOB=${s%.*}
 
   # 2) Kill job that hasn't started yet with ^C
-  trap ctrl_c INT HUP
-  function ctrl_c() {
-    echo ""
-    echo "Killing ${SJOB}"
-    qdel ${SJOB}
-    exit 0
-  }
+  trap 'echo ""; echo "Killing ${SJOB}"; qdel ${SJOB}; exit 1' SIGINT SIGHUP
 
   # 3) Wait for job to start
   date
@@ -211,7 +205,7 @@ function create_tunnel () {
       fi
     done
   fi
-  cmd="ssh -N -l ${REM_USER} -L ${LOCALPORT}:${REM_HOST}:${PORT} cheyenne.ucar.edu"
+  cmd="ssh -N -L ${LOCALPORT}:${REM_HOST}:${PORT} ${REM_USER}@cheyenne.ucar.edu"
   echo $cmd
   nohup $cmd &
   tunnel=$!
@@ -261,16 +255,22 @@ if [ ! -z $JOBID_TO_KILL ]; then
   exit 0
 fi
 
-# RUN launch_job ON CHEYENNE
+# RUN launch_job ON CHEYENNE unless a job ID or remote host name are provided
+# (if one of above is provided, we just want to re-tunnel to existing jupyter)
 if [ -z $JOBID ] && [ -z $REM_HOST ]; then
   rm -f .port .token .last_run.log
-  ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.log
-    $(declare -f launch_job)
-    launch_job ${REM_USER} ${WALLTIME} ${CONDA_ENV} ${ACCOUNT}
-EOF
-  REM_HOST=`grep Job\ host .last_run.log | cut -d ':' -f 2 | tr -d ' '`
-  PORT=`grep Port\ to\ forward .last_run.log | cut -d ':' -f 2 | tr -d ' '`
-  TOKEN=`grep Token\ for\ jupyter .last_run.log | cut -d ':' -f 2 | tr -d ' '`
+  (ssh -t ${REM_USER}@cheyenne.ucar.edu "$(declare -f launch_job); launch_job ${REM_USER} ${WALLTIME} ${CONDA_ENV} ${ACCOUNT}" ; echo $? > .ret_code) | tee .last_run.log
+  RET_CODE=`cat .ret_code`
+  rm .ret_code
+  if [ $RET_CODE -ne 0 ]; then
+    exit $RET_CODE
+  fi
+
+  # Note that "ssh -t" seems to insert carriage return (\r)
+  # to be safe, translate \r and \n -> ' ' (and then delete all spaces)
+  REM_HOST=`grep Job\ host .last_run.log | cut -d ':' -f 2 | tr '\r' ' ' | tr '\n' ' ' | tr -d ' '`
+  PORT=`grep Port\ to\ forward .last_run.log | cut -d ':' -f 2 | tr '\r' ' ' | tr '\n' ' ' | tr -d ' '`
+  TOKEN=`grep Token\ for\ jupyter .last_run.log | cut -d ':' -f 2 | tr '\r' ' ' | tr '\n' ' ' | tr -d ' '`
   echo $PORT > .port
   echo $TOKEN > .token
 fi
@@ -279,10 +279,10 @@ fi
 if [ -z $REM_HOST ]; then
   if [ ! -z $JOBID ]; then
     echo "Getting remote host from Job ID..."
-    ssh ${REM_USER}@cheyenne.ucar.edu /bin/bash << EOF | tee .last_run.host
-    qstat -xf $JOBID | grep exec_host | awk -F= '{print $2}'
-EOF
-    REM_HOST=`cat .last_run.host | cut -d '/' -f 1`
+    rm -f .last_run.host
+    ssh ${REM_USER}@cheyenne.ucar.edu "qstat -xf $JOBID | grep exec_host | awk -F= '{print \$2}'" > .last_run.host
+    cat .last_run.host
+    REM_HOST=`cat .last_run.host | cut -d '/' -f 1 | tr '\r' ' ' | tr '\n' ' ' | tr -d ' '`
     if [ -z $REM_HOST ]; then
       echo "Unable to determine host from provided job ID"
       exit 1
@@ -299,5 +299,6 @@ if [ $? -eq 0 ]; then
   if [ -z $TOKEN ]; then
     echo "Reminder: your jupyter token is $TOKEN"
   fi
+  echo "Running create_tunnel..."
   create_tunnel
 fi
