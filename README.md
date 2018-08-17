@@ -54,16 +54,13 @@ The host name should be printed as part of the output of the script the first ti
 ```
 Job host:  r8i7n9
 ```
-Or can be found with
-```
-$ qstat -xf JOBID | grep exec_host
-    exec_host = r8i7n9/1
-```
-Where `JOBID` is also available from the script output
+Alternatively, you can also use the `-i JOBID` option, where `JOBID` is also available from the script output
 ```
 Job ID: 1692005
 ```
 or from running `qstat` on cheyenne.
+Note that `-i` will prompt you for your yubikey log in twice -
+once to determine the host name, and again to actually create the tunnel.
 
 1. When you are done with jupyter, you can kill the cheyenne job with `-k JOBID_TO_KILL`
 (see above for tips on determining the job ID)
