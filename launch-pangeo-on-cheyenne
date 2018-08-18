@@ -34,6 +34,9 @@ function usage () {
 REM_USER=$USER
 WALLTIME="4:00:00"
 CONDA_ENV=pangeo-cheyenne
+if [ `uname` == "Darwin" ] || [ `uname` == "Linux" ]; then
+  OPEN_BROWSER=TRUE
+fi
 while getopts "u:l:A:i:p:H:w:k:e:h" opt; do
   case $opt in
     u|l)
@@ -217,7 +220,7 @@ function create_tunnel () {
 
   echo "Use ^C to kill ssh tunnel"
 
-  if [ `uname` == "Darwin" ]; then
+  if [ "${OPEN_BROWSER}" == "TRUE" ]; then
     # Listen to :${LOCALPORT}, open jupyter web page when tunnel is connected
     echo "Waiting for tunnel to open"
     while [ -z "`lsof -Pi :${LOCALPORT} -sTCP:LISTEN`" ]; do
@@ -228,7 +231,11 @@ function create_tunnel () {
       sleep 1
     done
     echo "Opening jupyter lab!"
-    open http://localhost:${LOCALPORT}
+    if [ `uname` == "Darwin" ]; then
+      open http://localhost:${LOCALPORT}
+    elif [ `uname` == "Linux" ]; then
+      xdg-open http://localhost:${LOCALPORT}
+    fi
   fi
 
   # Instead of sleeping, should we be forwarding the jupyter log with either
