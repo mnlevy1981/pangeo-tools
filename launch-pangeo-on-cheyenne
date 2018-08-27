@@ -161,6 +161,8 @@ EOF
       WAITTIME=$((WAITTIME + 1))
     fi
   done
+  echo ""
+  date
 
   # 4) After job is running, figure out correct ssh command / token
   #    Then return the jupyter port number
@@ -184,12 +186,12 @@ EOF
   PORT=$(echo $ADDRESS | awk -F':' ' { print $2 } ' | awk -F'/' ' { print $1 } ')
   TOKEN=$(echo $ADDRESS | awk -F'=' ' { print $NF } ')
 
-  echo ""
+  echo "----------"
   echo "Job ID: $SJOB"
   echo "Job host: $HOST"
   echo "Port to forward for jupyter lab: $PORT"
   echo "Token for jupyter lab: $TOKEN"
-  echo ""
+  echo "----------"
 }
 #######################################
 
@@ -307,6 +309,9 @@ if [ $? -eq 0 ]; then
   if [ -z $TOKEN ]; then
     echo "Reminder: your jupyter token is $TOKEN"
   fi
+  echo ""
+  echo "****"
+  echo ""
   echo "Running create_tunnel..."
   create_tunnel
 fi
